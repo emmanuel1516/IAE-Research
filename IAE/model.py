@@ -5,6 +5,7 @@ from IA.model import NeuralNetwork
 from IAE.memory import ExperienceMemory
 from IAE.exploration import MemoryGuidedExplorer
 from IAE.memory_monitor import MemoryMonitor
+from IAE.memory_controller import MemoryController
 
 
 class EvolutionaryAI:
@@ -34,6 +35,8 @@ class EvolutionaryAI:
 
         # Detector de posible olvido
         self.monitor = MemoryMonitor(tolerance=0.005)
+        
+        self.controller = MemoryController()
 
     def load(self, path):
         self.network.load(path)
@@ -124,6 +127,14 @@ class EvolutionaryAI:
             # Explorar solamente si detectamos deterioro
             if forgetting["forgetting_detected"]:
                 print("\n=== EXPLORACIÓN ACTIVADA ===")
+                
+                memory_weight = self.controller.calculate_weight(
+                    forgetting["loss_increase"]
+                )
+
+                self.explorer.memory_weight = memory_weight
+
+                print(f"Peso de memoria seleccionado: {memory_weight:.2f}")
 
                 # X_val e y_val deben contener validación
                 # de la fase nueva, separada del entrenamiento.
