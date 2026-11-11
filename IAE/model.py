@@ -3,8 +3,8 @@ import numpy as np
 
 from IA.model import NeuralNetwork
 from IAE.memory import ExperienceMemory
-from IAE.exploration import WeightExplorer
-
+from IAE.exploration import MemoryGuidedExplorer
+from IAE.memory_monitor import MemoryMonitor
 
 
 class EvolutionaryAI:
@@ -18,18 +18,22 @@ class EvolutionaryAI:
         # Red neuronal convencional
         self.network = NeuralNetwork(seed=seed)
 
-        # Memoria de experiencias
+        # Memoria de experiencias con reservorio
         self.memory = ExperienceMemory(
             capacity=memory_capacity,
             seed=seed
         )
 
         # Exploración de pesos
-        self.explorer = WeightExplorer(
+        self.explorer = MemoryGuidedExplorer(
             noise_scale=noise_scale,
             candidates=candidates,
+            memory_weight=0.5,
             seed=seed
         )
+
+        # Detector de posible olvido
+        self.monitor = MemoryMonitor(tolerance=0.005)
 
     def load(self, path):
         self.network.load(path)
@@ -50,14 +54,28 @@ class EvolutionaryAI:
         epochs=1000,
         lr=0.1
     ):
-        # Recuperamos experiencias anteriores
-        if len(self.memory) > 0:
+        has_memory = len(self.memory) > 0
+
+        before = None
+        forgetting = None
+        exploration = None
+
+        # Recuperar recuerdos y medir su rendimiento
+        # antes de aprender los nuevos ejemplos.
+        if has_memory:
             X_old, y_old = self.memory.sample(
                 n=replay_size
             )
 
+            before = self.monitor.evaluate(
+                self.network,
+                X_old,
+                y_old
+            )
+
             X_train = np.vstack([X_new, X_old])
             y_train = np.vstack([y_new, y_old])
+
         else:
             X_train = X_new
             y_train = y_new
@@ -72,26 +90,83 @@ class EvolutionaryAI:
             lr=lr
         )
 
-        # Exploración adicional
-        print("\n=== EXPLORACIÓN DE PESOS ===")
+        # Comprobar si aumentó el error antiguo
+        if has_memory:
+            after = self.monitor.evaluate(
+                self.network,
+                X_old,
+                y_old
+            )
 
-        result = self.explorer.explore(
-            self.network,
-            X_val,
-            y_val
-        )
+            forgetting = self.monitor.detect_forgetting(
+                before,
+                after
+            )
 
-        print(
-            f"Error inicial: {result['initial_loss']:.6f}"
-        )
-        print(
-            f"Mejor error: {result['best_loss']:.6f}"
-        )
-        print(
-            f"¿Mejoró?: {result['improved']}"
-        )
+            print("\n=== MONITOR DE MEMORIA ===")
+            print(
+                f"Loss anterior: "
+                f"{before['loss']:.6f}"
+            )
+            print(
+                f"Loss actual: "
+                f"{after['loss']:.6f}"
+            )
+            print(
+                f"Cambio de accuracy: "
+                f"{forgetting['accuracy_change']:+.2f} puntos"
+            )
+            print(
+                f"¿Posible olvido?: "
+                f"{forgetting['forgetting_detected']}"
+            )
 
-        # Guardamos experiencias nuevas para el futuro
+            # Explorar solamente si detectamos deterioro
+            if forgetting["forgetting_detected"]:
+                print("\n=== EXPLORACIÓN ACTIVADA ===")
+
+                # X_val e y_val deben contener validación
+                # de la fase nueva, separada del entrenamiento.
+                # Usamos recuerdos antiguos para orientar
+                # la selección de mutaciones.
+                exploration = self.explorer.explore_guided(
+                    self.network,
+                    X_old,
+                    y_old,
+                    X_val,
+                    y_val
+                )
+
+                print(
+                    f"Error antiguo: "
+                    f"{exploration['initial']['old_loss']:.6f}"
+                    f" -> {exploration['best']['old_loss']:.6f}"
+                )
+                print(
+                    f"Error nuevo: "
+                    f"{exploration['initial']['new_loss']:.6f}"
+                    f" -> {exploration['best']['new_loss']:.6f}"
+                )
+                print(
+                    f"Error combinado: "
+                    f"{exploration['initial']['total_loss']:.6f}"
+                    f" -> {exploration['best']['total_loss']:.6f}"
+                )
+
+            else:
+                print("\nExploración omitida: no se detectó olvido.")
+
+        else:
+            print(
+                "\nExploración omitida: "
+                "todavía no hay recuerdos anteriores."
+            )
+
+        # Incorporar experiencias nuevas a la memoria
         self.remember(X_new, y_new)
 
-        return result
+        return {
+            "forgetting": forgetting,
+            "exploration": exploration,
+            "memory_size": len(self.memory)
+        }

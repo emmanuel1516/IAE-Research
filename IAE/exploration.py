@@ -76,3 +76,94 @@ class WeightExplorer:
             "improved": best_loss < initial_loss,
             "evaluations": self.candidates + 1
         }
+
+
+class MemoryGuidedExplorer(WeightExplorer):
+    def __init__(
+        self,
+        noise_scale=0.02,
+        candidates=20,
+        memory_weight=0.5,
+        seed=42
+    ):
+        super().__init__(
+            noise_scale=noise_scale,
+            candidates=candidates,
+            seed=seed
+        )
+
+        if not 0 <= memory_weight <= 1:
+            raise ValueError(
+                "memory_weight debe estar entre 0 y 1"
+            )
+
+        self.memory_weight = memory_weight
+
+    def evaluate_balanced(
+        self,
+        model,
+        X_old,
+        y_old,
+        X_new,
+        y_new
+    ):
+        old_loss = self.evaluate(
+            model, X_old, y_old
+        )
+
+        new_loss = self.evaluate(
+            model, X_new, y_new
+        )
+
+        total_loss = (
+            self.memory_weight * old_loss
+            + (1 - self.memory_weight) * new_loss
+        )
+
+        return {
+            "old_loss": old_loss,
+            "new_loss": new_loss,
+            "total_loss": total_loss
+        }
+
+    def explore_guided(
+        self,
+        model,
+        X_old,
+        y_old,
+        X_new,
+        y_new
+    ):
+        original = self.get_weights(model)
+
+        best_weights = original
+
+        initial = self.evaluate_balanced(
+            model, X_old, y_old, X_new, y_new
+        )
+
+        best = initial.copy()
+
+        for _ in range(self.candidates):
+            candidate = self.mutate(original)
+
+            self.set_weights(model, candidate)
+
+            score = self.evaluate_balanced(
+                model, X_old, y_old, X_new, y_new
+            )
+
+            if score["total_loss"] < best["total_loss"]:
+                best = score.copy()
+                best_weights = candidate
+
+        self.set_weights(model, best_weights)
+
+        return {
+            "initial": initial,
+            "best": best,
+            "improved": (
+                best["total_loss"] < initial["total_loss"]
+            ),
+            "evaluations": self.candidates + 1
+        }
